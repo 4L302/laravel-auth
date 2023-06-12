@@ -3,59 +3,146 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\ProfileUpdateRequest;
-use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
+use App\Models\Post;
+use App\Models\Category;
+use App\Models\Tag;
+use App\Http\Requests\StorePostRequest;
+use App\Http\Requests\UpdatePostRequest;
+use Doctrine\DBAL\Schema\View;
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Redirect;
-use Illuminate\View\View;
 
-class ProfileController extends Controller
+class PostController extends Controller
 {
     /**
-     * Display the user's profile form.
+     * Display a listing of the resource.
+     *
+     *
      */
-    public function edit(Request $request): View
+    public function index()
     {
-        return view('admin.profile.edit', [
-            'user' => $request->user(),
-        ]);
-    }
+        $user = Auth::user();
+        if ($user->is_admin) {
+            $posts = Post::paginate(3);
 
-    /**
-     * Update the user's profile information.
-     */
-    public function update(ProfileUpdateRequest $request): RedirectResponse
-    {
-        $request->user()->fill($request->validated());
-
-        if ($request->user()->isDirty('email')) {
-            $request->user()->email_verified_at = null;
+        } else {
+            $posts = Post::where('user_id', $user->id)->paginate(3);
         }
-
-        $request->user()->save();
-
-        return Redirect::route('admin.profile.edit')->with('status', 'profile-updated');
+        return view('admin.posts.index', compact('posts'));
     }
 
     /**
-     * Delete the user's account.
+     * Show the form for creating a new resource.
+     *
+     * @
      */
-    public function destroy(Request $request): RedirectResponse
+    public function create()
     {
-        $request->validateWithBag('userDeletion', [
-            'password' => ['required', 'current-password'],
-        ]);
+        $categories = Category::all();
+        $tags = Tag::all();
+        return view('admin.posts.create', compact('categories', 'tags'));
+    }
 
-        $user = $request->user();
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @param  \App\Http\Requests\StorePostRequest  $request
+     *
+     */
+    public function store(StorePostRequest $request)
+    {
+        $data = $request->validated();
+        $slug = Str::slug($request->title, '-');
+        $data['slug'] = $slug;
+        //$currentUser = Auth::user();
+        $data['user_id'] = Auth::id();
+        if ($request->hasFile('image')) {
+            $image_path = Storage::put('uploads', $request->image);
+            $data['image'] = asset('storage/' . $image_path);
+        }
+        $post = Post::create($data);
 
-        Auth::logout();
+        if ($request->has('tags')) {
+            $post->tags()->attach($request->tags);
+        }
+        return redirect()->route('admin.posts.show', $post->slug);
+    }
 
-        $user->delete();
+    /**
+     * Display the specified resource.
+     *
+     * @param  \App\Models\Post  $post
+     *
+     *
+     */
+    public function show(Post $post)
+    {
+        if (!Auth::user()->is_admin && $post->user_id !== Auth::id()) {
+            abort(403);
+        }
+        return view('admin.posts.show', compact('post'));
+    }
 
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
+    /**
+     * Show the form for editing the specified resource.
+     *
+     * @param  \App\Models\Post  $post
+     *
+     */
+    public function edit(Post $post)
+    {
+        if (!Auth::user()->is_admin && $post->user_id !== Auth::id()) {
+            abort(403);
+        }
+        $categories = Category::all();
+        $tags = Tag::all();
+        return view('admin.posts.edit', compact('post', 'categories', 'tags'));
+    }
 
-        return Redirect::to('/');
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \App\Http\Requests\UpdatePostRequest  $request
+     * @param  \App\Models\Post  $post
+     *
+     */
+    public function update(UpdatePostRequest $request, Post $post)
+    {
+        $data = $request->validated();
+        $slug = Str::slug($request->title, '-');
+        $data['slug'] = $slug;
+        if ($request->hasFile('image')) {
+            if ($post->image) {
+                Storage::delete($post->image);
+            }
+            $image_path = Storage::put('uploads', $request->image);
+            $data['image'] = asset('storage/' . $image_path);
+        }
+        $post->update($data);
+        if ($request->has('tags')) {
+            $post->tags()->sync($request->tags);
+        } else {
+            $post->tags()->sync([]);
+        }
+        return redirect()->route('admin.posts.show', $post->slug)->with('message', 'Il post è stato aggiornato');
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  \App\Models\Post  $post
+     *
+     */
+    public function destroy(Post $post)
+    {
+        if ($post->image) {
+            $datogliere = "";
+            $imagetoremove = str_replace($datogliere, '', $post->image);
+            //dd($imagetoremove);
+            Storage::delete($imagetoremove);
+        }
+        $post->delete();
+        return redirect()->route('admin.posts.index')->with('message', "$post->title deleted successfully.");
     }
 }
